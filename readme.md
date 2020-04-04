@@ -1,5 +1,7 @@
 # COVID-19 Mobility .pdf to .tsv
 
+### [Download the .tsv data](https://github.com/kylemcdonald/covid-mobility-data/releases/download/2020-03-29/2020-03-29-covid-mobility-data.zip).
+
 This script attempts to digitize the [COVID-19 Mobility Reports](https://www.google.com/covid19/mobility/) produced by Google.
 
 The start date is currently hardcoded to 2020-02-16, and the total number of days defaults to 43.
@@ -16,7 +18,7 @@ To convert all the .pdf files to .tsv files, first make sure your python environ
 
 * Python 3
 * Python packages: numpy, scipy, pdf2image, pytesseract
-* Note that the Tesseract binaries need to be installed separately: `sudo apt install tesseract-ocr`
+* Note that the Tesseract binaries need to be installed separately: `sudo apt install tesseract-ocr`. On Debian you may also need to install `poppler-utils`.
 
 Then run the following commands to create an output folder and pipe all the data to the folder.
 
