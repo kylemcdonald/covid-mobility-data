@@ -17,8 +17,8 @@ $ mkdir pdf && cd pdf && xargs -n 1 curl -O < ../urls.txt
 To convert all the .pdf files to .tsv files, first make sure your python environment is ready:
 
 * Python 3
-* Python packages: numpy, scipy, pdf2image, pytesseract
-* Note that the Tesseract binaries need to be installed separately: `sudo apt install tesseract-ocr`. On Debian you may also need to install `poppler-utils`.
+* Python packages: numpy
+* pdftocairo and pdftotext: `sudo apt install poppler-utils`
 
 Then run the following commands to create an output folder and pipe all the data to the folder.
 
@@ -29,10 +29,10 @@ $ for f in pdf/*; do echo $f; python covid-pdf-to-tsv.py $f > tsv/`basename $f`.
 
 ## Operating principle
 
-This script identifies the light-gray x-axis ticks in each plot using a vertical-line-edge kernel. Then the bounding box of these ticks are selected within a few known regions: 3 locations on the first page, 3 on the second page, and in up to 12 locations on the remaining pages, with the exception of the last page.
+This script uses pdftocairo to convert to Postscript, and a regular expression to identify polylines. Polylines and ticks in different regions are categorized appropriately.
 
-Then we select a subregion of the .pdf immediately above the tick marks. We assume the plots are all -80% to +80% range, and have a 2:1 aspect ratio and a specific size given the DPI. Finally, we select pixels that match the blue line color from the plot, and find the mean y-position along a set of 43 vertical bars.
+We use pdftotext to extract all the place names. The place names in the Postscript output are too obfuscated by layout and style commands for the extraction to work correctly.
 
 ## Accuracy
 
-Please visually confirm that this works for you. Because digitization happens at a relatively low DPI and using a naive algorithm, it's likely that the accuracy is low for data points that are very different from their neighbors. When there are missing datapoints in the original plots, it's possible that nearby datapoints will also be missing. In practice there is probably a fixed +/-1% bias to a lot of the output, and +/-5% error for plots with a lot of variation.
+Please visually confirm that this works for you. From examining a few hundred datapoints manually, there is less than a 0.5% error compared to the printed numbers. But there may be some edge cases where the extraction failed.

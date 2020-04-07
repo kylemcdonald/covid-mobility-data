@@ -1,10 +1,10 @@
 import numpy as np
-from scipy.ndimage import convolve
-from pdf2image import convert_from_bytes
-from pytesseract import image_to_string
 
-from itertools import cycle
+import re
+import os
+import subprocess
 from datetime import date, timedelta
+from itertools import cycle
 
 import argparse
 parser = argparse.ArgumentParser()
@@ -15,76 +15,69 @@ args = parser.parse_args()
 start_date = date(2020, 2, 16)
 days_per_plot = args.days_per_plot
 
-def get_country_name(arr):
-    sub = arr[200:280,80:1300].astype(np.float)
-    sub = sub.mean(axis=-1)
-    sub = np.minimum(sub, 110)
-    sub -= sub.min()
-    sub /= sub.max()
-    return image_to_string(sub)
+def points_inside(plot, box):
+    t,b,l,r = box
+    return (plot[:,0] >= l) & (plot[:,0] <= r) & \
+         (plot[:,1] >= t) & (plot[:,1] <= b)
 
-def get_subregion_names(arr):
-    regions = [
-        (90,170,80,1000),
-        (1000,1080,80,1000)
+def chunks(lst, n):
+    for i in range(0, len(lst), n):
+        yield lst[i:i + n]
+        
+def get_region(pdf_fn):
+    txt_fn = '.pdftotext.txt'
+    err = subprocess.call(['pdftotext', '-f', '1', '-l', '1', pdf_fn, txt_fn])
+    if err:
+        return
+    with open(txt_fn) as f:
+        text = f.read()
+    os.remove(txt_fn)
+        
+    region = text.splitlines()[2]
+    region = region.split(' ')[:-3] # remove date
+    region = ' '.join(region)
+    return region
+
+def list_subregions(pdf_fn):
+    txt_fn = '.pdftotext.tmp'
+    err = subprocess.call(['pdftotext', '-f', '3', pdf_fn, txt_fn])
+    if err:
+        return
+    with open(txt_fn) as f:
+        text = f.read()
+    os.remove(txt_fn)
+
+    ignore = [
+        'Retail & recreation',
+        'Grocery & pharmacy',
+        'Parks',
+        'Transit stations',
+        'Workplace',
+        'Residential',
+        'Not enough data for this date',
+        'needs a significant volume of data to generate an aggregated and anonymous view of trends.',
     ]
-    names = [image_to_string(arr[t:b,l:r]) for t,b,l,r in regions]
-    return names
-
-def extract_mask(img, color):
-    return np.all(img == color, axis=-1)
-
-def extract_plot_mask(img):
-    return extract_mask(img, [66,133,244])
-
-def extract_line_mask(img):
-    return extract_mask(img, [218,220,224])
-
-def extract_tick_mask(img):
-    mask = extract_line_mask(img) * 1
-    kernel = np.array([[0,1],[0,1]]) # vertical line detector
-    ticks_left = convolve(mask, kernel)
-    ticks_left = ticks_left == ticks_left.max()
-    ticks_right = convolve(mask, 1-kernel)
-    ticks_right = ticks_right == ticks_right.max()
-    ticks = ticks_left | ticks_right
-    return ticks
-
-def nonzero_bbox(img, tblr):
-    t,b,l,r = tblr
-    sub = img[t:b,l:r]
-    xsum = sub.sum(0)
-    xpeaks = xsum > (xsum.max() / 2)
-    left = np.argmax(xpeaks)
-    right = len(xpeaks) - np.argmax(xpeaks[::-1]) - 1
-    ysum = sub.sum(1)
-    ypeaks = ysum > (ysum.max() / 2)
-    top = np.argmax(ypeaks)
-    bottom = len(ypeaks) - np.argmax(ypeaks[::-1]) - 1
-    return top+t, bottom+t, left+l, right+l
-
-def extract_data(plot_mask, tick_mask, region):  
-    plot_height = 160 # fixed height
-    plot_range = 80 # from y axis labels
-    padding = 40
     
-    zero_offset = int(plot_height / 2)
-    t,b,l,r = region
-    plot_top = t - plot_height
-    plot = plot_mask[plot_top-padding:t+padding,l:r].copy()
-    datapoints = []
-    for x in np.linspace(2, plot.shape[1]-2, days_per_plot):
-        x = int(x)
-        segment = plot[:, x]
-        valid = np.argwhere(segment == 1)
-        if len(valid):
-            y = np.mean(valid)
-        else:
-            y = np.nan
-        datapoints.append(y)
-    datapoints = np.array(datapoints)
-    datapoints = ((zero_offset + padding) - datapoints) * (plot_range / (plot_height / 2))
-    return datapoints
+    for line in text.splitlines():
+        line = line.strip()
+
+        if len(line) == 0:
+            continue
+        if line.startswith('Sun '):
+            continue
+        if line.endswith('%'):
+            continue
+        if line.startswith('*'):
+            continue
+        if line.endswith('aseline'):
+            continue
+        if line in ignore:
+            continue
+
+        if line == 'About this data':
+            break
+
+        yield line
 
 def build_tracking_areas(xs, ys):
     tracking_areas = []
@@ -93,70 +86,147 @@ def build_tracking_areas(xs, ys):
             tracking_areas.append((top,bottom,left,right))
     return tracking_areas
 
-def extract_from_tracking_areas(arr, categories, tracking_areas):
-    plot_mask = extract_plot_mask(arr)
-    tick_mask = extract_tick_mask(arr)
-    results = []
+polyline_re = re.compile(r'((?:[-\d.]+[\n ]+[-\d.]+[\n ]+[lm][\n ]+)+)S Q', re.DOTALL)
+def extract_plots_and_ticks(page):
+    ticks = []
+    plots = []
+    matches = polyline_re.findall(page)
+    for j, match in enumerate(matches):
+        parts = match.split(' ')
+        n = (len(parts)//3)*3
+        parts = np.array(parts)[:n].reshape(-1,3)
+        parts = parts[:,:2].astype(np.float)
+        vline = parts[0,0] == parts[1,0]
+        hline = parts[0,1] == parts[1,1]
+        if vline:
+            ticks.append(parts)
+        elif not hline:
+            plots.append(parts)
+    ticks = np.array(ticks).reshape(-1,2)
+    return plots, ticks
+
+def bbox(group):
+    t = np.min(group[:,1])
+    b = np.max(group[:,1])
+    l = np.min(group[:,0])
+    r = np.max(group[:,0])
+    return t,b,l,r
+
+def get_top(ticks, tblr):
+    valid = points_inside(ticks, tblr)
+    points = ticks[valid]
+    if len(points) == 0:
+        return None
+    top = np.min(points[:,1])
+    return top
+
+def get_left(ticks, tblr):
+    valid = points_inside(ticks, tblr)
+    points = ticks[valid]
+    if len(points) == 0:
+        return None
+    top = np.min(points[:,0])
+    return top
+
+def select_plot(plots, tblr):
+    for plot in plots:
+        inside = points_inside(plot, tblr)
+        if np.mean(inside) > 0.5:
+            return plot
+    return None
+
+def extract_from_tracking_areas(page, categories, tracking_areas, baseline_offset):
+    days_per_plot = 43
+    plot_scale = 80
+    plot_width = 114.316
+    
+    plots, ticks = extract_plots_and_ticks(page)
+    
+    results = []    
     for category, tracking_area in zip(categories, tracking_areas):
-        region = nonzero_bbox(tick_mask, tracking_area)
-        datapoints = extract_data(plot_mask, tick_mask, region)
-        results.append((category, datapoints))
+        cur = [None] * days_per_plot
+        plot = select_plot(plots, tracking_area)
+        top = get_top(ticks, tracking_area)
+        if plot is None or top is None:
+            results.append((category, cur))
+            continue
+        baseline = top - baseline_offset
+        ys = (plot[:,1] - baseline) * (-plot_scale / baseline_offset)
+        if len(ys) == days_per_plot:
+            cur = ys
+        else:
+            xs = plot[:,0]
+            spacing = plot_width / (days_per_plot - 1)
+            left = get_left(ticks, tracking_area)
+            indices = np.round((plot[:,0] - left) / spacing)
+            for i, y in zip(indices, ys):
+                cur[int(i)] = y
+        results.append((category, cur))
     return results
 
-def nan_safe_str(f):
-    return str(f) if f == f else ''
+def process_pdf(fn):
+    ps_fn = '.pdftocairo.ps'
+    err = subprocess.call(['pdftocairo', '-ps', fn, ps_fn])
+    if err:
+        return
+    with open(ps_fn) as f:
+        ps = f.read()
+    os.remove(ps_fn)
+
+    pages = ps.split('%%Page:')[1:]
+    
+    categories = ['Retail & recreation', 'Grocery & pharmacy', 'Parks', 'Transit stations', 'Workplace', 'Residential']
+
+    region = get_region(fn)
+    
+    # region plots are taller
+    baseline_offset = 34.297
+
+    xs = [100,500]
+    ys = [340,450,570,690]
+    tracking_areas = build_tracking_areas(xs, ys)
+    results = extract_from_tracking_areas(pages[0], categories[:3], tracking_areas, baseline_offset)
+    for result in results:
+        yield ('region', region, *result)
+    
+    xs = [100,500]
+    ys = [10,150,260,400]
+    tracking_areas = build_tracking_areas(xs, ys)
+    results = extract_from_tracking_areas(pages[1], categories[3:], tracking_areas, baseline_offset)
+    for result in results:
+        yield ('region', region, *result)
+
+    # subregion plots are shorter
+    baseline_offset *= 5/6
+
+    all_subregions = []
+    for subregion in list_subregions(fn):
+        all_subregions.extend([subregion] * 6)
+    all_subregions = iter(all_subregions)
+
+    results = []
+    for page in pages[2:-1]:
+        xs = [40,220,390,555]
+        ys = [100,230,400,550,700]
+        tracking_areas = build_tracking_areas(xs, ys)
+        results = extract_from_tracking_areas(page, cycle(categories), tracking_areas, baseline_offset)
+        for result in results:
+            try:
+                subregion = next(all_subregions)
+            except StopIteration:
+                return
+            yield ('subregion', subregion, *result)
+
+def none_safe_str(f):
+    return '' if f is None else str(round(f,2))
 
 def print_header():
     parts = [(start_date + timedelta(i)).isoformat() for i in range(days_per_plot)]
-    parts = ['Region', 'Category'] + parts
+    parts = ['Kind', 'Name', 'Category'] + parts
     print('\t'.join(parts))
 
-def print_tsv(region, category, data):
-    print(f'{region}\t{category}\t' + '\t'.join(map(nan_safe_str, data)))
-
-def process_pdf(fn):
-    with open(fn, 'rb') as f:
-        images = convert_from_bytes(f.read())
-
-    categories = ['Retail & recreation', 'Grocery & pharmacy', 'Parks', 'Transit stations', 'Workplace', 'Residential']
-
-    xs = [300,1300]
-    ys = [1024,1350,1680,2000]
-    arr = np.array(images[0])
-    region = get_country_name(arr)
-    tracking_areas = build_tracking_areas(xs, ys)
-    results = extract_from_tracking_areas(arr, categories[:3], tracking_areas)
-    for category, datapoints in results:
-        yield (region, category, datapoints)
-
-    xs = [300,1300]
-    ys = [250,480,820,1100]
-    arr = np.array(images[1])
-    tracking_areas = build_tracking_areas(xs, ys)
-    results = extract_from_tracking_areas(arr, categories[3:], tracking_areas)
-    for category, datapoints in results:
-        yield (region, category, datapoints)
-                
-    for ppm in images[2:-1]:    
-        arr = np.array(ppm)
-        subregions = get_subregion_names(arr)
-        
-        xs = [125,600,1080,1580]
-        ys = [440,730,1180]
-        tracking_areas = build_tracking_areas(xs, ys)
-        results = extract_from_tracking_areas(arr, cycle(categories), tracking_areas)
-        for category, datapoints in results:
-            yield (subregions[0], category, datapoints)
-        
-        if len(subregions[1]) == 0:
-            continue
-        
-        xs = [125,600,1080,1580]
-        ys = [1180,1640,2000]
-        tracking_areas = build_tracking_areas(xs, ys)
-        results = extract_from_tracking_areas(arr, cycle(categories), tracking_areas)
-        for category, datapoints in results:
-            yield (subregions[1], category, datapoints)
+def print_tsv(kind, region, category, data):
+    print(f'{kind}\t{region}\t{category}\t' + '\t'.join(map(none_safe_str, data)))
 
 if __name__ == '__main__':
     print_header()
