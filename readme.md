@@ -11,7 +11,7 @@ If the PDFs are re-downloaded and re-processed after they are updated, there's a
 To download the .pdf files, run the following command:
 
 ```
-$ mkdir pdf && cd pdfs && xargs -n 1 curl -O < ../urls.txt
+$ mkdir pdf && cd pdf && xargs -n 1 curl -O < ../urls.txt
 ```
 
 To convert all the .pdf files to .tsv files, first make sure your python environment is ready:
