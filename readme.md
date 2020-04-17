@@ -1,8 +1,8 @@
 # COVID-19 Mobility .pdf to .tsv
 
-## Please use [this implementation instead](https://github.com/nacnudus/google-location-coronavirus) by [@nacnudus](https://github.com/nacnudus/)
+## Google has now [released the data in .csv files](https://www.google.com/covid19/mobility/)
 
-This repo was an early implementation but is less robust, less up to date, and probably less accurate.
+If you need to parse the old .pdf files I recommend [this implementation instead](https://github.com/nacnudus/google-location-coronavirus). This repo was an early implementation but is less robust, less up to date, and probably less accurate.
 
 ### [Download the .tsv data](https://github.com/kylemcdonald/covid-mobility-data/releases/download/2020-03-29/2020-03-29-covid-mobility-data.zip).
 
